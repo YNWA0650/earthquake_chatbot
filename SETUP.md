@@ -2,6 +2,7 @@
 
 ## Prerequisites
 - Python 3.11
+- Node.js >=20 (the frontend dependencies require it — check with `node --version`)
 - An OpenAI API key
 
 ---
