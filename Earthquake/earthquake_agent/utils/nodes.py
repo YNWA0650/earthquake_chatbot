@@ -26,7 +26,10 @@ from pydantic import BaseModel, Field
 from earthquake_agent.utils.state import (
     AgentEnrichedResponse,
     APICallLog,
+    APIResult,
     EarthquakeQueryModel,
+    EvaluationResult,
+    RubricCheck,
     State,
     apply_radius_default,
     build_default_model,
@@ -163,11 +166,21 @@ MAPPING RULES
    - "last 24 hours" → starttime = yesterday's datetime, endtime = now
    - If the user gives only a start ("since January") set starttime and leave endtime null.
 
-2. GEOGRAPHY
-   - Named cities → use well-known lat/lon coordinates (latitude + longitude).
-     If the user does not give a radius, leave maxradiuskm null — the default will be applied.
-   - Named countries or regions → use a bounding box (minlatitude/maxlatitude/minlongitude/maxlongitude).
-   - Never set both circle and bbox fields.
+2. GEOGRAPHY  ← read carefully, violations cause API failures
+   Choose EXACTLY ONE geometry type and set ONLY those fields:
+
+   CIRCLE  (for cities, landmarks, or user-specified coordinates)
+     Set: latitude, longitude
+     Leave null: minlatitude, maxlatitude, minlongitude, maxlongitude
+     Example: "near Tokyo" → latitude=35.68, longitude=139.69 (maxradiuskm added later)
+
+   BOUNDING BOX  (for countries, regions, multi-city areas)
+     Set: minlatitude, maxlatitude, minlongitude, maxlongitude
+     Leave null: latitude, longitude, maxradiuskm
+     Example: "near Turkey" → minlatitude=36.0, maxlatitude=42.1, minlongitude=26.0, maxlongitude=45.0
+
+   RULE: NEVER set both circle fields (latitude/longitude) and bbox fields simultaneously.
+         Setting both causes the API to return their intersection, which is always empty.
 
 3. MAGNITUDE
    - Vague phrases require an assumption — record it in the assumptions list:
@@ -226,9 +239,21 @@ def normaliser_node(state: State):
     2. Named location without radius → apply DEFAULT_RADIUS_KM.
     3. Merge user fields over build_default_model() to produce the final model.
     4. Store user-specified fields and assumptions separately in state.
+
+    On evaluator retry, eval_feedback is appended to the system prompt so the
+    LLM knows exactly what was wrong with the previous normalisation.
+    eval_feedback is cleared in the return dict so the subsequent summariser
+    pass does not inherit it.
     """
+    eval_feedback = state.get("eval_feedback")
+    feedback_section = (
+        f"\n\nEVALUATOR FEEDBACK — your previous normalisation was rejected. "
+        f"Correct the specific issues described below before producing new output:\n{eval_feedback}"
+        if eval_feedback else ""
+    )
+
     response: NormalisedQuery = normaliser_llm.invoke(
-        [SystemMessage(content=QUERY_NORMALISER_PROMPT),
+        [SystemMessage(content=QUERY_NORMALISER_PROMPT + feedback_section),
          HumanMessage(content=state["user_query"])]
     )
 
@@ -259,11 +284,12 @@ def normaliser_node(state: State):
         summary_parts.append(f"assumptions={assumptions}")
 
     return {
-        "query_type": response.query_type,
+        "query_type":      response.query_type,
         "normalised_query": user_fields,
-        "action": "build_execute_query",
-        "assumptions": assumptions,
-        "messages": [AIMessage(content="Normalised: " + " | ".join(summary_parts))],
+        "action":          "build_execute_query",
+        "assumptions":     assumptions,
+        "eval_feedback":   None,   # consumed here — must not reach the new summariser pass
+        "messages":        [AIMessage(content="Normalised: " + " | ".join(summary_parts))],
     }
 
 
@@ -374,12 +400,15 @@ def summariser_node(state: State):
 
     The LLM produces only title and answer_summary.
     All other AgentEnrichedResponse fields are set deterministically from state.
+    On evaluator retry, eval_feedback is appended to the prompt so the LLM
+    knows specifically what to fix.
     """
     parsed           = state.get("parsed_result")
     retrieved_at_utc = state.get("retrieved_at_utc", "unknown")
     api_call_url     = state.get("api_call_url", "unknown")
     assumptions      = state.get("assumptions", [])
     user_query       = state.get("user_query", "")
+    eval_feedback    = state.get("eval_feedback")
 
     if parsed is None:
         return {}
@@ -387,11 +416,17 @@ def summariser_node(state: State):
     evidence_block   = format_result_for_summariser(parsed, retrieved_at_utc, api_call_url)
     assumptions_text = "\n".join(f"  • {a}" for a in assumptions) if assumptions else "  (none)"
 
+    feedback_section = (
+        f"\n\nEVALUATOR FEEDBACK — your previous response failed these checks. "
+        f"Address each issue in this response:\n{eval_feedback}"
+        if eval_feedback else ""
+    )
+
     prompt = SUMMARISER_PROMPT.format(
         assumptions=assumptions_text,
         user_query=user_query,
         evidence_block=evidence_block,
-    )
+    ) + feedback_section
 
     llm_output: SummariserOutput = summariser_llm.invoke(
         [SystemMessage(content=prompt)]
@@ -422,11 +457,252 @@ def summariser_node(state: State):
 
 
 # ---------------------------------------------------------------------------
-# Conditional edge
+# Evaluator
+# ---------------------------------------------------------------------------
+
+EVALUATOR_PROMPT = """You are a quality evaluator for a grounded earthquake information agent.
+
+Assess the two checks below and return a structured result.
+
+---
+
+CHECK 1 — Intent alignment
+Does the API URL actually search for what the user asked?
+Compare the user query against the URL parameters and flag mismatches such as:
+  - Wrong geography (user said "Japan" but URL uses a single lat/lon point)
+  - Wrong query type (user said "how many" but URL uses /query instead of /count)
+  - Wrong time range (user said "last year" but URL covers only one month)
+  - Wrong magnitude threshold (user said "big earthquakes" but no minmagnitude is set)
+
+CHECK 2 — Claims verification
+Are the numerical claims in the answer supported by the evidence?
+  - Count claims: if the answer says "X earthquakes were found", verify against total_available
+  - Magnitude claims: if the answer says "strongest was M7.2", verify against the event list
+  - Absence claims: if the answer says "no events found", verify the result is actually empty
+
+---
+
+USER QUERY: {user_query}
+
+API URL USED: {api_call_url}
+
+EVIDENCE SUMMARY:
+{evidence_summary}
+
+ANSWER TEXT:
+{answer_text}
+"""
+
+
+class EvaluatorLLMAssessment(BaseModel):
+    intent_aligned: bool = Field(
+        description="True if the API URL parameters correctly represent what the user asked for"
+    )
+    intent_detail: str = Field(
+        description="One sentence: why the URL is or is not aligned with the user query"
+    )
+    claims_verified: bool = Field(
+        description="True if all numerical claims in the answer are supported by the evidence"
+    )
+    claims_detail: str = Field(
+        description="One sentence: what was verified, or which specific claim is wrong and why"
+    )
+
+
+evaluator_llm = llm.with_structured_output(EvaluatorLLMAssessment)
+
+
+def _evidence_summary(parsed: APIResult) -> str:
+    """Compact evidence summary for the evaluator prompt."""
+    if parsed.result_type == "empty":
+        return f"Empty result — no events matched (total_available={parsed.total_available or 0})"
+    if parsed.result_type == "count":
+        return f"Count result: {parsed.count}"
+    lines = [
+        f"Result type: {parsed.result_type}",
+        f"Total matching in catalogue: {parsed.total_available}",
+        f"Events returned: {parsed.returned}",
+    ]
+    for ev in parsed.events[:15]:
+        lines.append(f"  ID={ev.id}  M{ev.magnitude}  {ev.place or 'unknown'}")
+    return "\n".join(lines)
+
+
+def evaluator_node(state: State):
+    """
+    Quality gate that runs after every summariser pass.
+
+    Deterministic rubric checks verify structural completeness (title, timestamp,
+    URL, assumptions, event IDs, counts). LLM checks assess intent alignment and
+    claim accuracy. A confidence score is computed as the fraction of passed checks.
+
+    If score < 70 and retries remain (max 2):
+      - Intent misaligned → route back to normaliser for a fresh pipeline run.
+      - Content issues    → route back to summariser with specific feedback.
+    On the third pass the result is force-passed to prevent infinite loops.
+    """
+    loop_count = state.get("eval_loop_count", 0) + 1
+
+    enriched: AgentEnrichedResponse | None = state.get("enriched_response")
+    parsed: APIResult | None               = state.get("parsed_result")
+    assumptions                            = state.get("assumptions", [])
+    user_query                             = state.get("user_query", "")
+    api_call_url                           = state.get("api_call_url", "")
+
+    if enriched is None or parsed is None:
+        return {
+            "eval_loop_count": loop_count,
+            "messages": [AIMessage(content="Evaluation skipped — no enriched response in state.")],
+        }
+
+    checks: list[RubricCheck] = []
+
+    # --- Deterministic checks ---
+
+    checks.append(RubricCheck(
+        name="title_present",
+        passed=bool(enriched.title.strip()),
+        detail=enriched.title[:80] if enriched.title else "title is empty",
+    ))
+
+    api_log = enriched.api_calls[0] if enriched.api_calls else None
+    checks.append(RubricCheck(
+        name="retrieval_timestamp_present",
+        passed=bool(api_log and api_log.retrieved_at_utc),
+        detail=api_log.retrieved_at_utc if api_log else "no api_calls recorded",
+    ))
+
+    checks.append(RubricCheck(
+        name="api_url_present",
+        passed=bool(api_log and api_log.url),
+        detail=(api_log.url[:80] + "…") if api_log and len(api_log.url) > 80 else (api_log.url if api_log else "missing"),
+    ))
+
+    if assumptions:
+        checks.append(RubricCheck(
+            name="assumptions_disclosed",
+            passed=bool(enriched.assumptions),
+            detail=(
+                f"{len(enriched.assumptions)} assumption(s) recorded"
+                if enriched.assumptions
+                else "assumptions were applied but not stored in enriched response"
+            ),
+        ))
+
+    if parsed.result_type in ("collection", "single_event") and parsed.events:
+        known_ids = {ev.id for ev in parsed.events}
+        id_found  = any(eid in enriched.answer_text for eid in known_ids)
+        checks.append(RubricCheck(
+            name="event_ids_referenced",
+            passed=id_found,
+            detail="at least one event ID present in answer" if id_found else "no event IDs from evidence found in answer text",
+        ))
+
+    if parsed.result_type == "count" and parsed.count is not None:
+        count_str = str(parsed.count)
+        checks.append(RubricCheck(
+            name="count_value_in_answer",
+            passed=count_str in enriched.answer_text,
+            detail=f"count={count_str} {'found' if count_str in enriched.answer_text else 'NOT found'} in answer",
+        ))
+
+    if parsed.result_type == "empty":
+        checks.append(RubricCheck(
+            name="failure_explained",
+            passed=len(enriched.answer_text.strip()) > 80,
+            detail="answer contains sufficient explanation" if len(enriched.answer_text.strip()) > 80 else "answer too brief for an empty result",
+        ))
+
+    # --- LLM checks ---
+
+    ev_summary = _evidence_summary(parsed)
+    llm_prompt = EVALUATOR_PROMPT.format(
+        user_query=user_query,
+        api_call_url=api_call_url,
+        evidence_summary=ev_summary,
+        answer_text=enriched.answer_text[:2000],
+    )
+
+    llm_assessment: EvaluatorLLMAssessment = evaluator_llm.invoke(
+        [SystemMessage(content=llm_prompt)]
+    )
+
+    checks.append(RubricCheck(
+        name="intent_aligned",
+        passed=llm_assessment.intent_aligned,
+        detail=llm_assessment.intent_detail,
+    ))
+    checks.append(RubricCheck(
+        name="claims_verified",
+        passed=llm_assessment.claims_verified,
+        detail=llm_assessment.claims_detail,
+    ))
+
+    # --- Score ---
+
+    score  = round((sum(1 for c in checks if c.passed) / len(checks)) * 100)
+    passed = score >= 70 or loop_count >= 3
+
+    # --- Routing decision ---
+
+    retry_target  = ""
+    retry_reason  = ""
+    eval_feedback = None
+
+    if not passed:
+        intent_check = next((c for c in checks if c.name == "intent_aligned"), None)
+        if intent_check and not intent_check.passed:
+            retry_target  = "normaliser"
+            retry_reason  = f"Intent misaligned: {llm_assessment.intent_detail}"
+            eval_feedback = (
+                f"Your previous normalisation produced this API URL:\n  {api_call_url}\n\n"
+                f"The evaluator rejected it for the following reason:\n  {llm_assessment.intent_detail}\n\n"
+                f"Re-examine the user query carefully and correct your field mapping. "
+                f"Pay particular attention to: query_type (/query vs /count), "
+                f"geography location & type, "
+                f"time range, and magnitude threshold."
+            )
+        else:
+            failed_checks = [c for c in checks if not c.passed]
+            retry_target  = "summariser"
+            retry_reason  = "Failed checks: " + "; ".join(f"{c.name} — {c.detail}" for c in failed_checks)
+            eval_feedback = retry_reason
+
+    result = EvaluationResult(
+        confidence_score=score,
+        passed=passed,
+        rubric_checks=checks,
+        retry_target=retry_target,
+        retry_reason=retry_reason,
+    )
+
+    status = f"Evaluation: {score}/100 — {'passed' if passed else f'retrying via {retry_target}'}"
+
+    return {
+        "evaluation_result": result,
+        "eval_loop_count":   loop_count,
+        "eval_feedback":     eval_feedback,
+        "messages":          [AIMessage(content=status)],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Conditional edges
 # ---------------------------------------------------------------------------
 
 def route_from_supervisor(state: State):
     action = state.get("action")
     if action == "normalise_query":
         return "normaliser"
+    return END
+
+
+def route_from_evaluator(state: State):
+    result: EvaluationResult | None = state.get("evaluation_result")
+    if result is None or result.passed:
+        return END
+    if result.retry_target == "normaliser":
+        return "normaliser"
+    if result.retry_target == "summariser":
+        return "summariser"
     return END

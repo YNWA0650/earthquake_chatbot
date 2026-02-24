@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal, Optional
 
 from langgraph.graph.message import AnyMessage, add_messages
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing_extensions import TypedDict
 
 
@@ -167,6 +167,30 @@ class EarthquakeQueryModel(BaseModel):
         default=DEFAULT_LIMIT, ge=1, le=20000,
         description="Max results to return. See DEFAULT_LIMIT; API hard cap is 20,000.",
     )
+
+    # ------------------------------------------------------------------
+    # Geometry invariant
+    # ------------------------------------------------------------------
+
+    @model_validator(mode="after")
+    def _resolve_geometry_conflict(self) -> "EarthquakeQueryModel":
+        """
+        Circle (lat/lon/radius) and bounding box are mutually exclusive.
+        When the LLM sets both, keep whichever group is more complete:
+          - full bbox beats circle (country/region queries)
+          - circle beats a partial bbox (city queries with stray bbox fields)
+        """
+        has_circle   = self.latitude is not None or self.longitude is not None
+        bbox         = (self.minlatitude, self.maxlatitude, self.minlongitude, self.maxlongitude)
+        has_full_bbox = all(v is not None for v in bbox)
+        has_any_bbox  = any(v is not None for v in bbox)
+
+        if has_full_bbox and has_circle:
+            self.latitude = self.longitude = self.maxradiuskm = None
+        elif has_circle and has_any_bbox and not has_full_bbox:
+            self.minlatitude = self.maxlatitude = self.minlongitude = self.maxlongitude = None
+
+        return self
 
     # ------------------------------------------------------------------
     # API param export
@@ -450,6 +474,7 @@ class APIResult(BaseModel):
 
 class APICallLog(BaseModel):
     """Operational record for a single USGS API call."""
+
     url: str                              # full URL with query string as sent
     retrieved_at_utc: str                 # ISO8601 UTC timestamp of the call
     result_type: str                      # "collection" | "single_event" | "count" | "empty"
@@ -469,6 +494,26 @@ class AgentEnrichedResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Evaluator output models
+# ---------------------------------------------------------------------------
+
+class RubricCheck(BaseModel):
+    """Result of a single evaluator rubric check."""
+    name: str
+    passed: bool
+    detail: str = ""
+
+
+class EvaluationResult(BaseModel):
+    """Quality gate output produced by the Evaluator."""
+    confidence_score: int              # 0–100, derived from fraction of checks passed
+    passed: bool                       # True when score >= 70 or max retries reached
+    rubric_checks: list[RubricCheck]   # one entry per check performed
+    retry_target: str                  # "" | "normaliser" | "summariser"
+    retry_reason: str                  # human-readable explanation when retry is needed
+
+
+# ---------------------------------------------------------------------------
 # LangGraph state schema
 # ---------------------------------------------------------------------------
 
@@ -480,7 +525,10 @@ class State(TypedDict):
     normalised_query: dict                    # field -> value extracted from user query (pre-defaults)
     assumptions: list[str]                    # ambiguous mappings and defaults applied
     api_response: dict[str, Any]              # raw USGS API response (provenance)
-    parsed_result: Optional[APIResult]        # structured output for Summariser and Validator
+    parsed_result: Optional[APIResult]        # structured output for Summariser and Evaluator
     retrieved_at_utc: str                     # ISO8601 UTC timestamp of the API call
     api_call_url: str                         # full URL as sent to USGS
     enriched_response: Optional[AgentEnrichedResponse]  # final output envelope
+    evaluation_result: Optional[EvaluationResult]       # latest evaluator output
+    eval_loop_count: int                      # incremented each evaluator pass; caps retries at 2
+    eval_feedback: Optional[str]              # feedback injected into summariser on retry
