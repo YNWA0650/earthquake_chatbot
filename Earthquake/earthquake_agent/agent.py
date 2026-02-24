@@ -8,6 +8,7 @@ from earthquake_agent.utils.nodes import (
     summariser_node,
     evaluator_node,
     route_from_supervisor,
+    route_from_summariser,
     route_from_evaluator,
 )
 
@@ -27,7 +28,11 @@ workflow.add_conditional_edges(
 )
 workflow.add_edge("normaliser_agent", "executor_agent")
 workflow.add_edge("executor_agent",   "summariser_agent")
-workflow.add_edge("summariser_agent", "evaluator_agent")
+workflow.add_conditional_edges(
+    "summariser_agent",
+    route_from_summariser,
+    {"evaluator": "evaluator_agent", END: END},
+)
 workflow.add_conditional_edges(
     "evaluator_agent",
     route_from_evaluator,

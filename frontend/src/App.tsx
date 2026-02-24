@@ -9,6 +9,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [statusLabel, setStatusLabel] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const initThread = useCallback(async () => {
@@ -53,7 +54,7 @@ export default function App() {
     setError(null);
 
     try {
-      const { content, enriched } = await sendMessage(threadId, userMessage.content);
+      const { content, enriched } = await sendMessage(threadId, userMessage.content, setStatusLabel);
 
       const assistantMessage: Message = {
         id: crypto.randomUUID(),
@@ -70,6 +71,7 @@ export default function App() {
       console.error(err);
     } finally {
       setIsLoading(false);
+      setStatusLabel('');
     }
   }, [inputValue, isLoading, threadId]);
 
@@ -120,6 +122,7 @@ export default function App() {
         <ChatWindow
           messages={messages}
           isLoading={isLoading}
+          statusLabel={statusLabel}
           onSuggestion={handleSuggestion}
         />
       </main>

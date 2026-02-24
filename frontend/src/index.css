@@ -306,6 +306,23 @@ body { height: 100dvh; overflow: hidden; }
 /* ── Loading dots ── */
 .message-bubble--loading { min-width: 56px; }
 
+.loading-status {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.loading-status-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  animation: status-appear 0.2s ease both;
+}
+
+@keyframes status-appear {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 .loading-dots {
   display: flex;
   align-items: center;

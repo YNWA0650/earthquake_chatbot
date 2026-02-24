@@ -19,10 +19,11 @@ export interface SendMessageResult {
 export async function sendMessage(
   threadId: string,
   userMessage: string,
+  onStatus?: (label: string) => void,
 ): Promise<SendMessageResult> {
   const stream = client.runs.stream(threadId, GRAPH_ID, {
     input: { messages: [{ role: 'human', content: userMessage }] },
-    streamMode: 'values',
+    streamMode: ['values', 'custom'],
   });
 
   // Collect the final state snapshot — values stream emits full state after each node,
@@ -32,6 +33,11 @@ export async function sendMessage(
   for await (const event of stream) {
     if (event.event === 'values') {
       finalState = event.data as Record<string, unknown> | null;
+    } else if (event.event === 'custom' && onStatus) {
+      const data = event.data as Record<string, unknown> | null;
+      if (data && typeof data['status'] === 'string') {
+        onStatus(data['status']);
+      }
     }
   }
 

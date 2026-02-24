@@ -190,6 +190,11 @@ class EarthquakeQueryModel(BaseModel):
         elif has_circle and has_any_bbox and not has_full_bbox:
             self.minlatitude = self.maxlatitude = self.minlongitude = self.maxlongitude = None
 
+        # maxradiuskm is only meaningful as part of a complete circle.
+        # Strip it when lat/lon are absent so it never creates an orphan geometry.
+        if self.maxradiuskm is not None and (self.latitude is None or self.longitude is None):
+            self.maxradiuskm = None
+
         return self
 
     # ------------------------------------------------------------------
@@ -536,3 +541,4 @@ class State(TypedDict):
     evaluation_result: Optional[EvaluationResult]       # latest evaluator output
     eval_loop_count: int                      # incremented each evaluator pass; caps retries at 2
     eval_feedback: Optional[str]              # feedback injected into summariser on retry
+    executor_error: Optional[str]             # set by executor on failure; routes graph to END

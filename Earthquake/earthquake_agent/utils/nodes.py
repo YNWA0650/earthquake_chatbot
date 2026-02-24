@@ -21,6 +21,7 @@ warnings.filterwarnings(
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from langgraph.config import get_stream_writer
 from langgraph.graph import END
 from pydantic import BaseModel, Field
 
@@ -124,6 +125,7 @@ supervisor_llm = llm.with_structured_output(SupervisorDecision)
 
 def supervisor_node(state: State):
     """Classifies intent. Appends glossary content when action is show_glossary."""
+    get_stream_writer()({"status": "Analysing Query"})
     decision = supervisor_llm.invoke(
         [SystemMessage(content=SUPERVISOR_PROMPT)] + state["messages"]
     )
@@ -246,6 +248,7 @@ def normaliser_node(state: State):
     eval_feedback is cleared in the return dict so the subsequent summariser
     pass does not inherit it.
     """
+    get_stream_writer()({"status": "Normalising Query"})
     eval_feedback = state.get("eval_feedback")
     feedback_section = (
         f"\n\nEVALUATOR FEEDBACK — your previous normalisation was rejected. "
@@ -304,6 +307,7 @@ def executor_node(state: State):
     call, captures retrieval timestamp and full URL, then parses the response.
     No LLM involved.
     """
+    get_stream_writer()({"status": "Fetching Seismic Data"})
     user_fields = state.get("normalised_query", {})
     query_type  = state.get("query_type") or "/query"
 
@@ -325,15 +329,19 @@ def executor_node(state: State):
     try:
         raw = asyncio.run(execute_query(model))
     except ValueError as e:
-        return {"messages": [AIMessage(content=f"Could not build query: {e}")]}
+        msg = f"Could not build query: {e}"
+        return {"executor_error": msg, "messages": [AIMessage(content=msg)]}
     except QueryExecutionError as e:
-        return {"messages": [AIMessage(content=f"API error ({e.status_code}): {e}")]}
+        msg = f"API error ({e.status_code}): {e}"
+        return {"executor_error": msg, "messages": [AIMessage(content=msg)]}
     except Exception as e:
-        return {"messages": [AIMessage(content=f"Unexpected error: {e}")]}
+        msg = f"Unexpected error: {e}"
+        return {"executor_error": msg, "messages": [AIMessage(content=msg)]}
 
     parsed = parse_api_response(raw, query_type=query_type)
 
     return {
+        "executor_error": None,
         "api_response": raw,
         "parsed_result": parsed,
         "retrieved_at_utc": retrieved_at_utc,
@@ -410,6 +418,30 @@ def summariser_node(state: State):
     assumptions      = state.get("assumptions", [])
     user_query       = state.get("user_query", "")
     eval_feedback    = state.get("eval_feedback")
+
+    get_stream_writer()({"status": "Composing Answer"})
+    executor_error = state.get("executor_error")
+    if executor_error:
+        error_response = AgentEnrichedResponse(
+            request_id=str(uuid.uuid4()),
+            title="Query Failed",
+            parsed_intent=user_query,
+            assumptions=assumptions,
+            api_calls=[],
+            answer_text=(
+                f"The query could not be completed.\n\n"
+                f"**Reason:** {executor_error}\n\n"
+                f"Please check your query and try again. "
+                f"If you specified a location, try being more specific (e.g. a city name instead of a country)."
+            ),
+            eval_score=0,
+            eval_passed=False,
+            eval_failure_category=None,
+        )
+        return {
+            "enriched_response": error_response,
+            "messages": [AIMessage(content=f"Error response generated: {executor_error}")],
+        }
 
     if parsed is None:
         return {}
@@ -542,6 +574,7 @@ def evaluator_node(state: State):
       - Content issues    → route back to summariser with specific feedback.
     On the third pass the result is force-passed to prevent infinite loops.
     """
+    get_stream_writer()({"status": "Evaluating Quality"})
     loop_count = state.get("eval_loop_count", 0) + 1
 
     enriched: AgentEnrichedResponse | None = state.get("enriched_response")
@@ -716,6 +749,12 @@ def route_from_supervisor(state: State):
     if action == "normalise_query":
         return "normaliser"
     return END
+
+
+def route_from_summariser(state: State):
+    if state.get("executor_error"):
+        return END
+    return "evaluator"
 
 
 def route_from_evaluator(state: State):

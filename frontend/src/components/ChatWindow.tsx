@@ -5,6 +5,7 @@ import { MessageBubble } from './MessageBubble';
 interface ChatWindowProps {
   messages: Message[];
   isLoading: boolean;
+  statusLabel?: string;
   onSuggestion?: (text: string) => void;
 }
 
@@ -15,7 +16,7 @@ const SUGGESTIONS = [
   'Show recent seismic activity near Turkey',
 ];
 
-export function ChatWindow({ messages, isLoading, onSuggestion }: ChatWindowProps) {
+export function ChatWindow({ messages, isLoading, statusLabel, onSuggestion }: ChatWindowProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -60,8 +61,15 @@ export function ChatWindow({ messages, isLoading, onSuggestion }: ChatWindowProp
                 <WaveformIcon />
               </div>
               <div className="message-bubble message-bubble--assistant message-bubble--loading">
-                <div className="loading-dots">
-                  <span /><span /><span />
+                <div className="loading-status">
+                  <div className="loading-dots">
+                    <span /><span /><span />
+                  </div>
+                  {statusLabel && (
+                    <span key={statusLabel} className="loading-status-label">
+                      {statusLabel}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
