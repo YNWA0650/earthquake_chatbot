@@ -54,6 +54,29 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             </ReactMarkdown>
           </div>
 
+          <div className={`eval-badge eval-badge--${enriched.eval_passed ? 'pass' : 'fail'}`}>
+            {enriched.eval_passed ? (
+              <>
+                <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <polyline points="2,6 5,9 10,3" />
+                </svg>
+                <span>Quality score: {enriched.eval_score}/100</span>
+              </>
+            ) : (
+              <>
+                <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M6 2v4M6 9v.5" />
+                </svg>
+                <span>Quality score: {enriched.eval_score}/100</span>
+                {enriched.eval_failure_category && (
+                  <span className="eval-badge-category">
+                    {enriched.eval_failure_category === 'misaligned_intent' ? 'Misaligned Intent' : 'Ungrounded Output'}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+
           <details className="explainability">
             <summary className="explainability-toggle">
               <span className="explainability-toggle-icon" aria-hidden />

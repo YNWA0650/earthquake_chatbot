@@ -512,6 +512,44 @@ body { height: 100dvh; overflow: hidden; }
 
 .enriched-answer a:hover { text-decoration-color: var(--accent); }
 
+/* ── Evaluation badge ── */
+.eval-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  align-self: flex-start;
+  padding: 3px 10px 3px 7px;
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid;
+}
+
+.eval-badge svg {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+.eval-badge--pass {
+  background: rgba(45, 155, 110, 0.10);
+  color: var(--success);
+  border-color: rgba(45, 155, 110, 0.25);
+}
+
+.eval-badge--fail {
+  background: rgba(194, 124, 26, 0.10);
+  color: var(--warning);
+  border-color: rgba(194, 124, 26, 0.25);
+}
+
+.eval-badge-category {
+  padding-left: 0.35rem;
+  border-left: 1px solid currentColor;
+  opacity: 0.75;
+}
+
 /* ── Explainability section ── */
 .explainability {
   margin-top: 0.5rem;

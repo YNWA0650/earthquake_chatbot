@@ -484,13 +484,17 @@ class APICallLog(BaseModel):
 
 
 class AgentEnrichedResponse(BaseModel):
-    """Canonical output envelope produced by the Summariser."""
+    """Canonical output envelope produced by the Summariser and stamped by the Evaluator."""
     request_id: str                    # UUID for this request
     title: str                         # short, descriptive title (LLM-composed)
     parsed_intent: str                 # verbatim user_query
     assumptions: list[str]             # all assumptions and defaults applied
     api_calls: list[APICallLog]        # one entry per USGS call made
     answer_text: str                   # user-facing grounded markdown answer (LLM-composed)
+    # Stamped by the Evaluator before reaching END
+    eval_score: int = 0                # 0–100 confidence score
+    eval_passed: bool = False          # True only when score >= threshold (not force-passed)
+    eval_failure_category: Optional[str] = None  # "misaligned_intent" | "ungrounded_output" | None
 
 
 # ---------------------------------------------------------------------------

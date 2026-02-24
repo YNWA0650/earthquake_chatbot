@@ -14,6 +14,9 @@ export interface AgentEnrichedResponse {
   assumptions: string[];
   api_calls: APICallLog[];
   answer_text: string;
+  eval_score: number;
+  eval_passed: boolean;
+  eval_failure_category: 'misaligned_intent' | 'ungrounded_output' | null;
 }
 
 export interface Message {

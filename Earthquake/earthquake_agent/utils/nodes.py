@@ -1,3 +1,4 @@
+
 import asyncio
 import os
 import uuid
@@ -638,35 +639,54 @@ def evaluator_node(state: State):
         detail=llm_assessment.claims_detail,
     ))
 
-    # --- Score ---
+    # --- Score and failure category ---
 
-    score  = round((sum(1 for c in checks if c.passed) / len(checks)) * 100)
-    passed = score >= 70 or loop_count >= 3
+    score         = round((sum(1 for c in checks if c.passed) / len(checks)) * 100)
+    genuine_pass  = score >= 80
+    force_pass    = loop_count >= 3 and not genuine_pass
+    passed        = genuine_pass or force_pass
 
-    # --- Routing decision ---
-
+    # Determine categorical failure reason (used for routing and for the enriched response
+    # when force-passing). Computed before the force-pass short-circuit so we always know
+    # what failed even when we stop retrying.
+    failure_category: Optional[str] = None
     retry_target  = ""
     retry_reason  = ""
     eval_feedback = None
 
-    if not passed:
+    if not genuine_pass:
         intent_check = next((c for c in checks if c.name == "intent_aligned"), None)
         if intent_check and not intent_check.passed:
-            retry_target  = "normaliser"
-            retry_reason  = f"Intent misaligned: {llm_assessment.intent_detail}"
-            eval_feedback = (
-                f"Your previous normalisation produced this API URL:\n  {api_call_url}\n\n"
-                f"The evaluator rejected it for the following reason:\n  {llm_assessment.intent_detail}\n\n"
-                f"Re-examine the user query carefully and correct your field mapping. "
-                f"Pay particular attention to: query_type (/query vs /count), "
-                f"geography location & type, "
-                f"time range, and magnitude threshold."
-            )
+            failure_category = "misaligned_intent"
+            if not force_pass:
+                retry_target  = "normaliser"
+                retry_reason  = f"Intent misaligned: {llm_assessment.intent_detail}"
+                eval_feedback = (
+                    f"Your previous normalisation produced this API URL:\n  {api_call_url}\n\n"
+                    f"The evaluator rejected it for the following reason:\n  {llm_assessment.intent_detail}\n\n"
+                    f"Re-examine the user query carefully and correct your field mapping. "
+                    f"Pay particular attention to: query_type (/query vs /count), "
+                    f"geography location & type, "
+                    f"time range, and magnitude threshold."
+                )
         else:
-            failed_checks = [c for c in checks if not c.passed]
-            retry_target  = "summariser"
-            retry_reason  = "Failed checks: " + "; ".join(f"{c.name} — {c.detail}" for c in failed_checks)
-            eval_feedback = retry_reason
+            failure_category = "ungrounded_output"
+            if not force_pass:
+                failed_checks = [c for c in checks if not c.passed]
+                retry_target  = "summariser"
+                retry_reason  = "Failed checks: " + "; ".join(f"{c.name} — {c.detail}" for c in failed_checks)
+                eval_feedback = retry_reason
+
+    # --- Stamp enriched_response with eval outcome ---
+
+    updated_enriched = None
+    existing_enriched = state.get("enriched_response")
+    if existing_enriched:
+        updated_enriched = existing_enriched.model_copy(update={
+            "eval_score":            score,
+            "eval_passed":           genuine_pass,
+            "eval_failure_category": failure_category if not genuine_pass else None,
+        })
 
     result = EvaluationResult(
         confidence_score=score,
@@ -676,13 +696,14 @@ def evaluator_node(state: State):
         retry_reason=retry_reason,
     )
 
-    status = f"Evaluation: {score}/100 — {'passed' if passed else f'retrying via {retry_target}'}"
+    status = f"Evaluation: {score}/100 — {'passed' if genuine_pass else ('force-passed' if force_pass else f'retrying via {retry_target}')}"
 
     return {
-        "evaluation_result": result,
-        "eval_loop_count":   loop_count,
-        "eval_feedback":     eval_feedback,
-        "messages":          [AIMessage(content=status)],
+        "evaluation_result":  result,
+        "eval_loop_count":    loop_count,
+        "eval_feedback":      eval_feedback,
+        "enriched_response":  updated_enriched,
+        "messages":           [AIMessage(content=status)],
     }
 
 
