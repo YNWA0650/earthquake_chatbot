@@ -4,11 +4,10 @@ interface InputBarProps {
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
-  onNewChat: () => void;
   isLoading: boolean;
 }
 
-export function InputBar({ value, onChange, onSend, onNewChat, isLoading }: InputBarProps) {
+export function InputBar({ value, onChange, onSend, isLoading }: InputBarProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -31,17 +30,6 @@ export function InputBar({ value, onChange, onSend, onNewChat, isLoading }: Inpu
 
   return (
     <div className="input-bar">
-      <button
-        className="btn btn--secondary"
-        onClick={onNewChat}
-        disabled={isLoading}
-        title="Start a new conversation"
-        aria-label="New chat"
-      >
-        <NewChatIcon />
-        <span>New chat</span>
-      </button>
-
       <div className="input-field-wrap">
         <textarea
           ref={textareaRef}
@@ -80,11 +68,3 @@ function SendIcon() {
   );
 }
 
-function NewChatIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
-    </svg>
-  );
-}

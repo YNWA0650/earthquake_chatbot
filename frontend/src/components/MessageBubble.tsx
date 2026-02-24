@@ -5,15 +5,38 @@ interface MessageBubbleProps {
   message: Message;
 }
 
+function WaveformIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <polyline points="2,12 5,9 8,13 11,6 14,10 17,8 22,12" />
+    </svg>
+  );
+}
+
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isHuman = message.role === 'human';
   const enriched = message.enriched;
+  const time = message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  if (!isHuman && enriched) {
+  if (isHuman) {
+    return (
+      <div className="message-row message-row--human">
+        <div className="message-bubble message-bubble--human">
+          <p className="message-content">{message.content}</p>
+          <span className="message-time">{time}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (enriched) {
     return (
       <div className="message-row message-row--assistant">
+        <div className="ai-avatar">
+          <WaveformIcon />
+        </div>
         <div className="message-bubble message-bubble--assistant message-bubble--enriched">
-          <span className="message-label">Earthquake Agent</span>
+          <div className="ai-sender-name">Earthquake Agent</div>
 
           <h3 className="enriched-title">{enriched.title}</h3>
 
@@ -104,24 +127,21 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             </div>
           </details>
 
-          <span className="message-time">
-            {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </span>
+          <span className="message-time">{time}</span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className={`message-row message-row--${message.role}`}>
-      <div className={`message-bubble message-bubble--${message.role}`}>
-        {!isHuman && (
-          <span className="message-label">Earthquake Agent</span>
-        )}
+    <div className="message-row message-row--assistant">
+      <div className="ai-avatar">
+        <WaveformIcon />
+      </div>
+      <div className="message-bubble message-bubble--assistant">
+        <div className="ai-sender-name">Earthquake Agent</div>
         <p className="message-content">{message.content}</p>
-        <span className="message-time">
-          {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </span>
+        <span className="message-time">{time}</span>
       </div>
     </div>
   );
