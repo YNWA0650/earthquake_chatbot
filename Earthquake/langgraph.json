@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "earthquake_agent": "./earthquake_agent/agent.py:graph"
+  },
+  "env": "./.env"
+}
