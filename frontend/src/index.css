@@ -50,8 +50,6 @@ body { height: 100dvh; overflow: hidden; }
   display: flex;
   flex-direction: column;
   height: 100dvh;
-  max-width: 860px;
-  margin: 0 auto;
   width: 100%;
 }
 
@@ -143,6 +141,9 @@ body { height: 100dvh; overflow: hidden; }
   display: flex;
   flex-direction: column;
   scroll-behavior: smooth;
+  max-width: 860px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .chat-window::-webkit-scrollbar { width: 5px; }
@@ -333,14 +334,18 @@ body { height: 100dvh; overflow: hidden; }
 .app-footer {
   border-top: 1px solid var(--border);
   background: var(--bg-surface);
-  padding: 0.875rem 1.5rem 1.125rem;
+  padding: 0.875rem 0 1.125rem;
   flex-shrink: 0;
+  width: 100%;
 }
 
 .input-bar {
   display: flex;
   align-items: stretch;
   gap: 0.5rem;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
 }
 
 .input-bar .btn {
