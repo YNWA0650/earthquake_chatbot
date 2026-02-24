@@ -304,7 +304,13 @@ body { height: 100dvh; overflow: hidden; }
 }
 
 /* ── Loading dots ── */
-.message-bubble--loading { min-width: 56px; }
+.message-bubble--loading {
+  min-width: 56px;
+  min-height: 30px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
 
 .loading-status {
   display: flex;
@@ -327,7 +333,6 @@ body { height: 100dvh; overflow: hidden; }
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 0.3rem 0;
 }
 
 .loading-dots span {
@@ -372,6 +377,8 @@ body { height: 100dvh; overflow: hidden; }
 
 .input-field-wrap {
   flex: 1;
+  display: flex;
+  align-items: center;
   background: #fff;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
