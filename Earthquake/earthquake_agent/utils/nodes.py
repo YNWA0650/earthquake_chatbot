@@ -137,6 +137,14 @@ def supervisor_node(state: State):
     return {
         "action": decision.action,
         "user_query": decision.user_query,
+        "eval_loop_count": 0,
+        "eval_feedback": None,
+        "executor_error": None,
+        "enriched_response": None,
+        "evaluation_result": None,
+        "parsed_result": None,
+        "retrieved_at_utc": None,
+        "api_call_url": None,
         "messages": [AIMessage(content=response_text)],
     }
 
